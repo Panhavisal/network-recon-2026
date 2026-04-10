@@ -897,17 +897,41 @@ def generate_reports():
         fh.write(json_content)
     print(f"[+] JSON report:     {json_path}")
 
-    # PDF
+    # PDF — prefer LaTeX backend when pdflatex is installed, else fall back
+    # to the built-in fpdf2 renderer.
     pdf_path = os.path.join(RESULTS_DIR, f"report_{ts}.pdf")
-    try:
-        generate_pdf(md_content, pdf_path)
-        print(f"[+] PDF report:      {pdf_path}")
-    except Exception as e:
-        import traceback
-        print(f"[!] PDF generation failed: {type(e).__name__}: {e}")
-        print("[!] Full traceback:")
-        traceback.print_exc()
-        print("[!] Markdown and JSON reports were still generated above.")
+    from . import latex_report
+
+    if latex_report.pdflatex_available():
+        tex_path = os.path.join(RESULTS_DIR, f"report_{ts}.tex")
+        ok, msg = latex_report.generate_latex_pdf(tex_path, pdf_path)
+        if ok:
+            print(f"[+] LaTeX source:    {tex_path}")
+            print(f"[+] PDF report:      {pdf_path}  (rendered via pdflatex)")
+        else:
+            print(f"[!] pdflatex compilation failed, falling back to fpdf2.")
+            print(f"[!] LaTeX error detail:\n{msg}\n")
+            try:
+                generate_pdf(md_content, pdf_path)
+                print(f"[+] PDF report:      {pdf_path}  (rendered via fpdf2 fallback)")
+            except Exception as e:
+                import traceback
+                print(f"[!] PDF generation failed: {type(e).__name__}: {e}")
+                print("[!] Full traceback:")
+                traceback.print_exc()
+                print("[!] Markdown and JSON reports were still generated above.")
+    else:
+        try:
+            generate_pdf(md_content, pdf_path)
+            print(f"[+] PDF report:      {pdf_path}  (rendered via fpdf2)")
+            print(f"[*] Tip: install pdflatex for a higher-quality PDF report:")
+            print(f"[*] {latex_report.install_hint()}")
+        except Exception as e:
+            import traceback
+            print(f"[!] PDF generation failed: {type(e).__name__}: {e}")
+            print("[!] Full traceback:")
+            traceback.print_exc()
+            print("[!] Markdown and JSON reports were still generated above.")
 
     # Terminal summary
     print(f"\n{'=' * 60}")

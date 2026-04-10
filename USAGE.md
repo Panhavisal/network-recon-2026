@@ -301,16 +301,62 @@ some reason (debugging, demos, etc.).
 
 ---
 
-## Reports — Markdown, JSON, PDF
+## Reports — Markdown, JSON, PDF, LaTeX
 
-When you exit (`0`, `Ctrl+C`, or end of CLI run), the tool writes **three
-files** to `scan_results/`:
+When you exit (`0`, `Ctrl+C`, or end of CLI run), the tool writes the
+following files to `scan_results/`:
 
 | File | Purpose |
 |---|---|
 | `report_<timestamp>.md` | Human-readable Markdown |
 | `report_<timestamp>.json` | Structured data for piping into other tools |
 | `report_<timestamp>.pdf` | Styled, **colored** PDF for sharing |
+| `report_<timestamp>.tex` | LaTeX source (only if a LaTeX engine is installed) |
+
+### Two PDF rendering paths
+
+The tool has **two PDF backends** and picks the best one available at runtime:
+
+1. **LaTeX backend (preferred)** — if `tectonic` or `pdflatex` is installed,
+   the report is rendered through a full LaTeX `article`-class template with
+   `booktabs` tables, `tcolorbox` colored finding boxes, `hyperref` clickable
+   CVE links to NVD, `fancyhdr` headers/footers, automatic table of
+   contents, and proper microtypography. Output looks like a real audit
+   report from a security firm.
+2. **fpdf2 fallback** — pure Python, no external dependencies. Used when no
+   LaTeX engine is found. Same content but more basic typography.
+
+The LaTeX path additionally writes the `.tex` source alongside the PDF so
+power users can edit the template and recompile.
+
+### Installing a LaTeX engine
+
+The simplest option is **tectonic** — it auto-downloads packages on first
+run, so you don't need to install a full TeX distribution:
+
+```bash
+# macOS
+brew install tectonic
+
+# Linux
+cargo install tectonic
+# or use your distro's package manager (Debian: apt install tectonic)
+```
+
+Alternatively, use **BasicTeX** (macOS) or **TeX Live** (Linux):
+
+```bash
+# macOS BasicTeX
+brew install --cask basictex
+sudo tlmgr update --self
+sudo tlmgr install tcolorbox booktabs fancyhdr titlesec enumitem
+
+# Debian / Ubuntu
+sudo apt install texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended
+```
+
+The next time you run a scan, the tool will detect the LaTeX engine
+automatically and render the LaTeX-quality PDF.
 
 ### Report structure
 

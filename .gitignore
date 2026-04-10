@@ -1,0 +1,26 @@
+# Private / local-only
+NginxConfig/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Scan results / reports
+results/
+*.pdf
+*.json
+*_*.txt
+
+# Editor / OS
+.idea/
+*.swp
+*.swo

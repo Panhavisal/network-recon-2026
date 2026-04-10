@@ -32,6 +32,80 @@ def output_path(name: str) -> str:
     return os.path.join(RESULTS_DIR, f"{name}_{timestamp()}.txt")
 
 
+# ── NSE vuln-script line parser ─────────────────────────────────────────────
+
+# Matches nmap's verbose NSE trace lines:
+#   NSE: [script-name M:60000313f4d8 192.168.88.1:443] vulns.lua: vulnerability '...' (host:...): NOT VULNERABLE.
+_NSE_LINE_RE = re.compile(
+    r"^NSE:\s*\[(?P<script>[\w\-\.]+)\s+M:[0-9a-fA-F]+\s+(?P<endpoint>\S+)\]\s*(?P<rest>.*)"
+)
+# Matches the description in vulns.lua structured output:
+#   vulns.lua: vulnerability 'Adobe ColdFusion Directory Traversal Vulnerability'
+_VULN_DESC_RE = re.compile(
+    r"vulns\.lua:\s*vulnerability\s*['\"](?P<desc>.+?)['\"]"
+)
+# Free-form passed phrasings that some scripts emit instead of "NOT VULNERABLE"
+_FREEFORM_PASSED_PHRASES = (
+    "not vulnerable",
+    "likely not vulnerable",
+    "seems to be not vulnerable",
+    "server likely not vulnerable",
+    "did not find any",
+    "couldn't find any",
+)
+
+
+def _classify_verdict(text: str) -> str | None:
+    """Return 'passed', 'failed', 'likely', or None if no verdict found."""
+    upper = text.upper()
+    if "NOT VULNERABLE" in upper:
+        return "passed"
+    if "LIKELY VULNERABLE" in upper:
+        return "likely"
+    lower = text.lower()
+    if any(p in lower for p in _FREEFORM_PASSED_PHRASES):
+        return "passed"
+    if re.search(r"\bVULNERABLE\b", upper):
+        return "failed"
+    return None
+
+
+def _parse_nse_vuln_line(stripped_line: str) -> dict | None:
+    """Parse one NSE verbose trace line into a structured vuln finding.
+
+    Returns dict {script, endpoint, description, verdict} or None if the
+    line isn't an NSE trace line we recognize.
+    """
+    m = _NSE_LINE_RE.match(stripped_line)
+    if not m:
+        return None
+    rest = m.group("rest")
+
+    desc_m = _VULN_DESC_RE.search(rest)
+    if desc_m:
+        description = desc_m.group("desc")
+    else:
+        # Strip trailing "(host:1.2.3.4): VERDICT." to leave just the description
+        description = re.sub(
+            r"\(host:[\d\.]+\):\s*(NOT VULNERABLE|VULNERABLE|LIKELY VULNERABLE)\.?\s*$",
+            "",
+            rest,
+        ).strip()
+        if not description:
+            description = rest.strip()
+
+    verdict = _classify_verdict(rest)
+    if verdict is None:
+        return None
+
+    return {
+        "script": m.group("script"),
+        "endpoint": m.group("endpoint"),
+        "description": description,
+        "verdict": verdict,
+    }
+
+
 def extract_findings(output: str) -> dict:
     """Parse nmap output for key findings."""
     findings = {
@@ -40,7 +114,10 @@ def extract_findings(output: str) -> dict:
         "open_ports": [],
         "os_detected": [],
         "cves": [],
-        "vulns": [],
+        "vulns": [],            # legacy: raw VULNERABLE-bearing lines we couldn't parse
+        "vulns_failed": [],     # confirmed VULNERABLE results: list of dicts
+        "vulns_likely": [],     # LIKELY VULNERABLE results: list of dicts
+        "vulns_passed": 0,      # count of NOT VULNERABLE checks (no detail kept)
         "services": [],
     }
 
@@ -67,9 +144,11 @@ def extract_findings(output: str) -> dict:
                 findings["open_ports"].append(stripped)
                 findings["services"].append(port_info)
 
-        # OS detection
-        if "OS details:" in stripped or "Running:" in stripped:
-            findings["os_detected"].append(stripped)
+        # OS detection — match real nmap OS lines, not NSE script chatter
+        # ("NSE: Running: http-enum ..." also contains "Running:")
+        if not stripped.startswith("NSE:"):
+            if "OS details:" in stripped or stripped.startswith("Running:"):
+                findings["os_detected"].append(stripped)
 
         # CVEs
         if "CVE-" in stripped.upper():
@@ -78,9 +157,20 @@ def extract_findings(output: str) -> dict:
                 if cve.upper() not in [c.upper() for c in findings["cves"]]:
                     findings["cves"].append(cve.upper())
 
-        # Vulnerability findings
-        if "VULNERABLE" in stripped.upper():
-            findings["vulns"].append(stripped)
+        # Vulnerability findings — try the structured NSE parser first
+        nse = _parse_nse_vuln_line(stripped)
+        if nse:
+            if nse["verdict"] == "passed":
+                findings["vulns_passed"] += 1
+            elif nse["verdict"] == "likely":
+                findings["vulns_likely"].append(nse)
+            else:  # failed
+                findings["vulns_failed"].append(nse)
+        elif "VULNERABLE" in stripped.upper():
+            # Non-NSE line mentioning VULNERABLE — only keep if it's a real
+            # finding (skip lines that explicitly say "NOT VULNERABLE")
+            if "NOT VULNERABLE" not in stripped.upper():
+                findings["vulns"].append(stripped)
 
     return findings
 

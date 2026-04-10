@@ -27,7 +27,10 @@ def build_markdown() -> str:
     total_hosts = 0
     all_ports = []
     all_cves = []
-    all_vulns = []
+    all_vulns_failed = []   # confirmed VULNERABLE (structured dicts)
+    all_vulns_likely = []   # LIKELY VULNERABLE (structured dicts)
+    all_vulns_passed = 0    # NOT VULNERABLE check count
+    all_vulns_legacy = []   # raw lines we couldn't parse
     all_os = []
     all_services = []
 
@@ -36,9 +39,16 @@ def build_markdown() -> str:
         total_hosts += f.get("hosts_up", 0)
         all_ports.extend(f.get("open_ports", []))
         all_cves.extend(f.get("cves", []))
-        all_vulns.extend(f.get("vulns", []))
+        all_vulns_failed.extend(f.get("vulns_failed", []))
+        all_vulns_likely.extend(f.get("vulns_likely", []))
+        all_vulns_passed += f.get("vulns_passed", 0)
+        all_vulns_legacy.extend(f.get("vulns", []))
         all_os.extend(f.get("os_detected", []))
         all_services.extend(f.get("services", []))
+
+    confirmed_count = len(all_vulns_failed) + len(all_vulns_legacy)
+    likely_count = len(all_vulns_likely)
+    total_checks = all_vulns_passed + confirmed_count + likely_count
 
     # Executive summary
     md.append("## Executive Summary")
@@ -48,11 +58,24 @@ def build_markdown() -> str:
     md.append(f"| Scans Performed | {len(session_log)} |")
     md.append(f"| Hosts Discovered | {total_hosts} |")
     md.append(f"| Open Ports Found | {len(all_ports)} |")
-    md.append(f"| CVEs Identified | {len(set(all_cves))} |")
-    md.append(f"| Vulnerabilities | {len(all_vulns)} |")
+    md.append(f"| CVEs Identified (catalog match) | {len(set(all_cves))} |")
+    md.append(f"| Confirmed Vulnerabilities | {confirmed_count} |")
+    if likely_count:
+        md.append(f"| Likely Vulnerabilities | {likely_count} |")
+    if total_checks:
+        md.append(f"| Vulnerability Checks Run | {total_checks} (passed: {all_vulns_passed}) |")
     md.append("")
 
-    risk = "CRITICAL" if all_cves else ("MEDIUM" if all_ports else "LOW")
+    if confirmed_count:
+        risk = "CRITICAL"
+    elif likely_count:
+        risk = "HIGH"
+    elif all_cves:
+        risk = "MEDIUM"
+    elif all_ports:
+        risk = "LOW"
+    else:
+        risk = "INFO"
     md.append(f"**Overall Risk Level:** {risk}")
     md.append("")
     md.append("---")
@@ -111,6 +134,43 @@ def build_markdown() -> str:
         md.append("---")
         md.append("")
 
+    # Vulnerability findings — only if there are real (failed/likely) results.
+    # Passed checks are summarized as a single count, not listed individually.
+    if confirmed_count or likely_count:
+        md.append("## Vulnerability Findings")
+        md.append("")
+        if all_vulns_failed:
+            md.append("### Confirmed VULNERABLE")
+            md.append("")
+            for v in all_vulns_failed:
+                md.append(f"- **{v['script']}** on `{v['endpoint']}` — {v['description']}")
+            md.append("")
+        if all_vulns_legacy:
+            md.append("### Other reported vulnerabilities")
+            md.append("")
+            for v in all_vulns_legacy:
+                md.append(f"- {v}")
+            md.append("")
+        if all_vulns_likely:
+            md.append("### Likely VULNERABLE")
+            md.append("")
+            for v in all_vulns_likely:
+                md.append(f"- **{v['script']}** on `{v['endpoint']}` — {v['description']}")
+            md.append("")
+        if all_vulns_passed:
+            md.append(f"*({all_vulns_passed} additional checks ran and passed — host not vulnerable to those.)*")
+            md.append("")
+        md.append("---")
+        md.append("")
+    elif total_checks:
+        # All checks passed — give the user a clean one-line summary instead of nothing
+        md.append("## Vulnerability Findings")
+        md.append("")
+        md.append(f"All {all_vulns_passed} active exploit checks passed. **No vulnerabilities confirmed.**")
+        md.append("")
+        md.append("---")
+        md.append("")
+
     # Individual scan details
     md.append("## Scan Details")
     md.append("")
@@ -149,10 +209,24 @@ def build_markdown() -> str:
             else:
                 shown = ", ".join(cves)
             md.append(f"- **CVEs:** {shown}")
-        if f.get("vulns"):
-            md.append("- **Vulnerabilities:**")
-            for v in f["vulns"]:
+        # Vulnerability scan results — show only real findings, summarize passed
+        scan_failed = f.get("vulns_failed") or []
+        scan_likely = f.get("vulns_likely") or []
+        scan_passed = f.get("vulns_passed", 0)
+        scan_legacy = f.get("vulns") or []
+
+        if scan_failed or scan_likely or scan_legacy:
+            md.append("- **Vulnerability findings:**")
+            for v in scan_failed:
+                md.append(f"  - [VULNERABLE] `{v['script']}` on `{v['endpoint']}` -> {v['description']}")
+            for v in scan_likely:
+                md.append(f"  - [LIKELY] `{v['script']}` on `{v['endpoint']}` -> {v['description']}")
+            for v in scan_legacy:
                 md.append(f"  - {v}")
+            if scan_passed:
+                md.append(f"  - *({scan_passed} other checks ran and passed)*")
+        elif scan_passed:
+            md.append(f"- **Vulnerability checks:** {scan_passed} ran, all passed (host not vulnerable to any)")
 
         md.append("")
 

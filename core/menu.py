@@ -13,12 +13,12 @@ from .colors import bold, cyan, green, yellow, red, dim
 
 
 def _pick_target(prompt: str) -> str | None:
-    """Let user type an IP or pick from discovered hosts."""
+    """Let user type an IP/domain/CIDR or pick from discovered hosts."""
     if discovered_hosts:
         print(f"\n[*] Discovered hosts ({len(discovered_hosts)}):")
         _print_host_table(discovered_hosts)
-        print(f"    Or type an IP/CIDR manually.")
-        answer = input(f"[?] {prompt} (number or IP): ").strip()
+        print(f"    Or type a domain, IP, or CIDR manually (e.g. example.com, 192.168.1.1, 192.168.1.0/24).")
+        answer = input(f"[?] {prompt} — number, domain, or IP: ").strip()
         if answer.isdigit():
             idx = int(answer)
             if 1 <= idx <= len(discovered_hosts):
@@ -27,18 +27,18 @@ def _pick_target(prompt: str) -> str | None:
             return None
         return answer if answer else None
     else:
-        answer = input(f"[?] {prompt}: ").strip()
+        answer = input(f"[?] Which target do you want to scan? (domain, IP, or CIDR): ").strip()
         return answer if answer else None
 
 
 def _pick_targets(prompt: str) -> list[str]:
-    """Let user select one, multiple, or all discovered hosts."""
+    """Let user select one, multiple, or all discovered hosts, or type a domain/IP/CIDR."""
     if discovered_hosts:
         print(f"\n[*] Discovered hosts ({len(discovered_hosts)}):")
         _print_host_table(discovered_hosts)
         print(f"    a. All hosts")
-        print(f"    Or type an IP manually.")
-        answer = input(f"[?] {prompt} (numbers like 1,3,5 / 'a' for all / IP): ").strip()
+        print(f"    Or type a domain, IP, or CIDR manually (e.g. example.com, 192.168.1.1).")
+        answer = input(f"[?] {prompt} — numbers (1,3,5), 'a' for all, or domain/IP: ").strip()
 
         if not answer:
             print(red("[!] Target is required."))
@@ -74,7 +74,7 @@ def _pick_targets(prompt: str) -> list[str]:
 
         return [answer]
     else:
-        answer = input(f"[?] Target IP: ").strip()
+        answer = input(f"[?] Which target do you want to scan? (domain, IP, or CIDR): ").strip()
         if not answer:
             print(red("[!] Target is required."))
             return []
@@ -173,7 +173,7 @@ def interactive_menu():
             choice = "0"
 
         if choice == "1":
-            target = _pick_target("Target (IP/range/CIDR)")
+            target = _pick_target("Which target do you want to fully scan?")
             if not target:
                 continue
             name = input("[?] Output name (e.g. server1): ").strip() or "full_scan"
@@ -197,22 +197,22 @@ def interactive_menu():
             _follow_up_menu()
 
         elif choice == "3":
-            targets = _pick_targets("Select target(s) for port scan")
+            targets = _pick_targets("Which target(s) do you want to port-scan?")
             if targets:
                 scan_batch(targets, scan_ports, "Port scanning")
 
         elif choice == "4":
-            targets = _pick_targets("Select target(s) for CVE scan")
+            targets = _pick_targets("Which target(s) do you want to CVE-scan?")
             if targets:
                 scan_batch(targets, scan_vuln, "CVE scanning")
 
         elif choice == "5":
-            targets = _pick_targets("Select target(s) for quick scan")
+            targets = _pick_targets("Which target(s) do you want to quick-scan?")
             if targets:
                 scan_batch(targets, scan_quick, "Quick scanning")
 
         elif choice == "6":
-            target = _pick_target("Target")
+            target = _pick_target("Which target do you want to run a custom scan on?")
             if not target:
                 continue
             extra = input("[?] Extra nmap flags (e.g. -sU --top-ports 100): ").strip()

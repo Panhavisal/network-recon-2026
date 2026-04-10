@@ -312,14 +312,78 @@ files** to `scan_results/`:
 | `report_<timestamp>.json` | Structured data for piping into other tools |
 | `report_<timestamp>.pdf` | Styled, **colored** PDF for sharing |
 
-### Markdown layout
+### Report structure
 
-1. **Executive Summary** — scans performed, hosts up, open ports, CVEs, vulns
-2. **Discovered Hosts** — IP, hostname, MAC, vendor table
-3. **CVEs Found** — every CVE ID surfaced by the vuln scripts
-4. **Operating Systems Detected** — what `-O` saw on each host
-5. **Open Ports & Services** — port, state, service banner
-6. **Scan Details** — per-scan command, timing, status, raw-output filename, findings
+The reports are laid out like a professional security assessment document:
+
+1. **Executive Summary** — Narrative overview of the risk posture, a severity
+   breakdown table (CRITICAL/HIGH/MEDIUM/LOW/INFO counts), and the overall
+   risk level.
+2. **Scope & Methodology** — Which hosts were in scope, which nmap techniques
+   were used, and how the severity ratings are defined.
+3. **Host Risk Matrix** — Per-host summary table: risk tier, weighted score,
+   number of open ports, CVE count, and finding count.
+4. **Detailed Findings** — The core of the report. Grouped per host, each
+   finding includes:
+   - Severity badge (CRITICAL / HIGH / MEDIUM / LOW / INFO)
+   - Endpoint (host:port)
+   - Evidence (the exact line nmap returned)
+   - Description (what the issue is and why it matters)
+   - Recommendation (specific, actionable remediation steps)
+5. **Remediation Roadmap** — Flat, numbered priority list of every finding
+   across all hosts, grouped by severity so you can work top-to-bottom.
+6. **Technical Appendix** — Raw data: CVE catalog matches, open-ports
+   inventory, OS detections, per-scan log with commands and raw-output
+   filenames.
+7. **Disclaimer** — Authorization reminder and scope caveats.
+
+### How findings are generated
+
+Findings are produced by a rules-based analysis engine in
+[core/recommendations.py](core/recommendations.py) that maps raw nmap data
+to structured findings. The engine has three kinds of rules:
+
+- **Service rules** — match on a specific port (e.g. `23/tcp` -> CRITICAL
+  Telnet) and/or a banner substring (e.g. `"busybox "` -> HIGH legacy
+  BusyBox). ~35 rules out of the box covering plaintext protocols (telnet,
+  ftp, rsh, rlogin, rexec, tftp, pop3, imap), databases (redis, mongodb,
+  elasticsearch, mysql, postgres, mssql, oracle, couchdb, memcached), file
+  shares (smb, nfs, rsync), management interfaces (rdp, vnc, docker api,
+  android adb), IoT/camera services (upnp, rtsp, dahua dvr), EoL web servers
+  (apache 1.x/2.2, iis 6), and more.
+- **OS rules** — flag end-of-life operating systems (Windows XP / 2000 /
+  2003 / 7 / Server 2008 / 8 / Server 2012, Linux 2.4 / 2.6 kernels).
+- **CVE density** — the number of CVEs reported by the `vulners` nmap script
+  against the installed software versions drives a CRITICAL / HIGH / MEDIUM
+  finding based on count thresholds (16+ / 6-15 / 1-5).
+- **NSE confirmed vulns** — any `VULNERABLE` (confirmed) result from
+  `--script vuln` becomes a CRITICAL finding; `LIKELY VULNERABLE` becomes
+  HIGH. "NOT VULNERABLE" results are counted but not listed individually.
+
+Each host gets a **risk tier** (the worst finding's severity) and a
+**weighted score** (CRITICAL=10, HIGH=5, MEDIUM=2, LOW=0.5). Hosts with no
+findings still appear in the scope table but are skipped from the detailed
+findings section.
+
+### Adding your own rules
+
+Edit [core/recommendations.py](core/recommendations.py), append a dict to
+`SERVICE_RULES` or `OS_RULES` following the schema of existing entries:
+
+```python
+{
+    "id": "SVC-EXAMPLE",
+    "port": "9999/tcp",            # exact port, optional
+    "banner": "exampleapp/",        # banner substring, optional (case-insensitive)
+    "severity": "HIGH",
+    "title": "Example service exposed",
+    "description": "Why this is a problem...",
+    "recommendation": "How to fix it...",
+}
+```
+
+At least one of `port` or `banner` must be present. If both are set, both
+must match. Changes take effect on the next scan run — no build step.
 
 ### PDF colors
 

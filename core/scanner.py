@@ -186,12 +186,16 @@ def _colorize(line: str) -> str:
     return line
 
 
-def run_nmap(args: list[str], description: str, out_file: str | None = None) -> str | None:
+def run_nmap(args: list[str], description: str, out_file: str | None = None,
+             target: str | None = None) -> str | None:
     """Run nmap with the given arguments, stream output live, and optionally save to file.
 
     When called from a worker thread that has set ``_ctx.quiet = True`` (via
     ``_run_quiet``), output is buffered and printed atomically as one block when
     the scan finishes — keeps the terminal readable in parallel mode.
+
+    ``target`` is the primary scan target (IP/domain/CIDR). Recorded in the
+    session_log so the recommendations engine can attribute findings to hosts.
     """
     quiet = getattr(_ctx, "quiet", False)
     tag = getattr(_ctx, "tag", "")
@@ -233,6 +237,7 @@ def run_nmap(args: list[str], description: str, out_file: str | None = None) -> 
             "command": " ".join(cmd),
             "return_code": process.returncode,
             "output_file": out_file,
+            "target": target,
             "findings": extract_findings(full_output),
         }
         with _log_lock:
@@ -279,6 +284,7 @@ def run_nmap(args: list[str], description: str, out_file: str | None = None) -> 
                 "command": " ".join(cmd),
                 "return_code": -1,
                 "output_file": out_file,
+                "target": target,
                 "findings": {"status": "interrupted"},
             })
         return None
@@ -298,6 +304,7 @@ def scan_full(target: str, output_name: str):
         ],
         f"Full vulnerability scan on {target}",
         out,
+        target=target,
     )
 
 
@@ -308,6 +315,7 @@ def scan_discover(target: str):
         ["-sn", "-T4", "-v", target],
         f"Host discovery (ping sweep) on {target}",
         out,
+        target=target,
     )
     if not output:
         return
@@ -377,6 +385,7 @@ def scan_ports(target: str):
         ["-p-", "-sS", "-sV", "-T4", "-v", target],
         f"Full port scan with service detection on {target}",
         out,
+        target=target,
     )
 
 
@@ -387,6 +396,7 @@ def scan_quick(target: str):
         ["--top-ports", "100", "-sS", "-sV", "-T4", "-v", target],
         f"Quick scan (top 100 ports) on {target}",
         out,
+        target=target,
     )
 
 
@@ -402,6 +412,7 @@ def scan_vuln(target: str):
         ],
         f"Vulnerability/CVE scan on {target}",
         out,
+        target=target,
     )
 
 

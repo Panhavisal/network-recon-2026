@@ -233,7 +233,7 @@ def interactive_menu():
             extra = input("[?] Extra nmap flags (e.g. -sU --top-ports 100): ").strip()
             args = extra.split() + [target] if extra else [target]
             out = output_path("custom")
-            run_nmap(args, f"Custom scan on {target}", out)
+            run_nmap(args, f"Custom scan on {target}", out, target=target)
 
         elif choice == "7":
             _show_hosts()

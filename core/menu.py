@@ -12,13 +12,23 @@ from .report import generate_reports
 from .colors import bold, cyan, green, yellow, red, dim
 
 
+def _print_target_help():
+    """Show the user every accepted target format with examples."""
+    print(dim("    You can enter any of these:"))
+    print(dim("      - a single IP        (local: 192.168.1.10   |  public: 1.1.1.1)"))
+    print(dim("      - a domain           (example.com, scanme.nmap.org)"))
+    print(dim("      - a CIDR range       (local: 192.168.1.0/24 |  public: 45.33.32.0/24)"))
+    print(dim("      - a hostname list    (host1,host2,host3)"))
+
+
 def _pick_target(prompt: str) -> str | None:
     """Let user type an IP/domain/CIDR or pick from discovered hosts."""
     if discovered_hosts:
         print(f"\n[*] Discovered hosts ({len(discovered_hosts)}):")
         _print_host_table(discovered_hosts)
-        print(f"    Or type a domain, IP, or CIDR manually (e.g. example.com, 192.168.1.1, 192.168.1.0/24).")
-        answer = input(f"[?] {prompt} — number, domain, or IP: ").strip()
+        print(f"    Or type a target manually:")
+        _print_target_help()
+        answer = input(f"[?] {prompt} — number, domain, IP, or CIDR: ").strip()
         if answer.isdigit():
             idx = int(answer)
             if 1 <= idx <= len(discovered_hosts):
@@ -27,7 +37,9 @@ def _pick_target(prompt: str) -> str | None:
             return None
         return answer if answer else None
     else:
-        answer = input(f"[?] Which target do you want to scan? (domain, IP, or CIDR): ").strip()
+        print(f"\n[?] {prompt}")
+        _print_target_help()
+        answer = input(f"[?] Enter target (domain, IP, or CIDR): ").strip()
         return answer if answer else None
 
 
@@ -37,8 +49,9 @@ def _pick_targets(prompt: str) -> list[str]:
         print(f"\n[*] Discovered hosts ({len(discovered_hosts)}):")
         _print_host_table(discovered_hosts)
         print(f"    a. All hosts")
-        print(f"    Or type a domain, IP, or CIDR manually (e.g. example.com, 192.168.1.1).")
-        answer = input(f"[?] {prompt} — numbers (1,3,5), 'a' for all, or domain/IP: ").strip()
+        print(f"    Or type a target manually:")
+        _print_target_help()
+        answer = input(f"[?] {prompt} — numbers (1,3,5), 'a' for all, or domain/IP/CIDR: ").strip()
 
         if not answer:
             print(red("[!] Target is required."))
@@ -74,7 +87,9 @@ def _pick_targets(prompt: str) -> list[str]:
 
         return [answer]
     else:
-        answer = input(f"[?] Which target do you want to scan? (domain, IP, or CIDR): ").strip()
+        print(f"\n[?] {prompt}")
+        _print_target_help()
+        answer = input(f"[?] Enter target(s) (domain, IP, or CIDR): ").strip()
         if not answer:
             print(red("[!] Target is required."))
             return []

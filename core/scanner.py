@@ -3,6 +3,8 @@
 import os
 import re
 import subprocess
+import threading
+import time
 from datetime import datetime
 
 from .state import (
@@ -10,6 +12,14 @@ from .state import (
     session_log, discovered_hosts, get_discovered_ips, timestamp,
 )
 from .colors import red, yellow, green, cyan, bold, dim, progress
+
+
+# Locks for thread-safe parallel scanning
+_log_lock = threading.Lock()    # guards session_log + discovered_hosts mutations
+_print_lock = threading.Lock()  # serializes per-host output blocks in parallel mode
+
+# Per-thread context: when set, run_nmap buffers output instead of streaming live
+_ctx = threading.local()
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -75,18 +85,41 @@ def extract_findings(output: str) -> dict:
     return findings
 
 
+def _colorize(line: str) -> str:
+    """Apply severity coloring to a single nmap output line."""
+    if "CVE-" in line:
+        return red(line.rstrip()) + "\n"
+    if "VULNERABLE" in line.upper():
+        return red(line.rstrip()) + "\n"
+    if "open" in line and ("/tcp" in line or "/udp" in line):
+        return yellow(line.rstrip()) + "\n"
+    return line
+
+
 def run_nmap(args: list[str], description: str, out_file: str | None = None) -> str | None:
-    """Run nmap with the given arguments, stream output live, and optionally save to file."""
+    """Run nmap with the given arguments, stream output live, and optionally save to file.
+
+    When called from a worker thread that has set ``_ctx.quiet = True`` (via
+    ``_run_quiet``), output is buffered and printed atomically as one block when
+    the scan finishes — keeps the terminal readable in parallel mode.
+    """
+    quiet = getattr(_ctx, "quiet", False)
+    tag = getattr(_ctx, "tag", "")
+
     cmd = [NMAP_BIN] + args
     if out_file:
         ensure_results_dir()
         cmd += ["-oN", out_file]
 
-    print(f"\n{cyan('=' * 60)}")
-    print(f"{bold('[*]')} {description}")
-    print(f"{dim('[*] Command:')} {' '.join(cmd)}")
-    print(f"{cyan('=' * 60)}\n")
+    header_label = f"[{tag}] " if tag else ""
 
+    if not quiet:
+        print(f"\n{cyan('=' * 60)}")
+        print(f"{bold('[*]')} {header_label}{description}")
+        print(f"{dim('[*] Command:')} {' '.join(cmd)}")
+        print(f"{cyan('=' * 60)}\n")
+
+    started = time.monotonic()
     try:
         process = subprocess.Popen(
             cmd,
@@ -97,17 +130,11 @@ def run_nmap(args: list[str], description: str, out_file: str | None = None) -> 
         )
         output_lines = []
         for line in process.stdout:
-            # Color CVEs and VULNERABLE in output
-            display = line
-            if "CVE-" in line:
-                display = red(line.rstrip()) + "\n"
-            elif "VULNERABLE" in line.upper():
-                display = red(line.rstrip()) + "\n"
-            elif "open" in line and ("/tcp" in line or "/udp" in line):
-                display = yellow(line.rstrip()) + "\n"
-            print(display, end="")
             output_lines.append(line)
+            if not quiet:
+                print(_colorize(line), end="")
         process.wait()
+        elapsed = time.monotonic() - started
         full_output = "".join(output_lines)
 
         entry = {
@@ -118,30 +145,52 @@ def run_nmap(args: list[str], description: str, out_file: str | None = None) -> 
             "output_file": out_file,
             "findings": extract_findings(full_output),
         }
-        session_log.append(entry)
+        with _log_lock:
+            session_log.append(entry)
 
-        if process.returncode == 0:
-            if out_file:
-                print(f"\n{green('[+]')} Results saved to: {out_file}")
+        if quiet:
+            # Print the whole block atomically so parallel workers don't garble each other.
+            with _print_lock:
+                print(f"\n{cyan('=' * 60)}")
+                print(f"{bold('[*]')} {header_label}{description} {dim(f'({elapsed:.1f}s)')}")
+                print(f"{dim('[*] Command:')} {' '.join(cmd)}")
+                print(f"{cyan('=' * 60)}")
+                for line in output_lines:
+                    print(_colorize(line), end="")
+                if process.returncode == 0:
+                    if out_file:
+                        print(f"{green('[+]')} {header_label}Results saved to: {out_file}")
+                else:
+                    print(f"{red('[!]')} {header_label}nmap exited with code {process.returncode}")
         else:
-            print(f"\n{red('[!]')} nmap exited with code {process.returncode}")
+            if process.returncode == 0:
+                if out_file:
+                    print(f"\n{green('[+]')} Results saved to: {out_file}")
+            else:
+                print(f"\n{red('[!]')} nmap exited with code {process.returncode}")
 
         return full_output
 
     except FileNotFoundError:
-        print(f"{red('[!]')} nmap not found. Make sure it is installed and in PATH.")
+        with _print_lock:
+            print(f"{red('[!]')} nmap not found. Make sure it is installed and in PATH.")
         return None
     except KeyboardInterrupt:
-        print(f"\n{yellow('[!]')} Scan interrupted by user.")
-        process.terminate()
-        session_log.append({
-            "time": datetime.now().isoformat(),
-            "description": description,
-            "command": " ".join(cmd),
-            "return_code": -1,
-            "output_file": out_file,
-            "findings": {"status": "interrupted"},
-        })
+        with _print_lock:
+            print(f"\n{yellow('[!]')} Scan interrupted by user.")
+        try:
+            process.terminate()
+        except Exception:
+            pass
+        with _log_lock:
+            session_log.append({
+                "time": datetime.now().isoformat(),
+                "description": description,
+                "command": " ".join(cmd),
+                "return_code": -1,
+                "output_file": out_file,
+                "findings": {"status": "interrupted"},
+            })
         return None
 
 
@@ -209,16 +258,17 @@ def scan_discover(target: str):
                     vendor = mac_match.group(2).strip().rstrip(")")
 
             if is_up:
-                existing_ips = get_discovered_ips()
-                if ip not in existing_ips:
-                    host_entry = {
-                        "ip": ip,
-                        "hostname": hostname,
-                        "mac": mac,
-                        "vendor": vendor,
-                    }
-                    discovered_hosts.append(host_entry)
-                    new_hosts.append(host_entry)
+                with _log_lock:
+                    existing_ips = get_discovered_ips()
+                    if ip not in existing_ips:
+                        host_entry = {
+                            "ip": ip,
+                            "hostname": hostname,
+                            "mac": mac,
+                            "vendor": vendor,
+                        }
+                        discovered_hosts.append(host_entry)
+                        new_hosts.append(host_entry)
 
         i += 1
 
@@ -267,12 +317,57 @@ def scan_vuln(target: str):
 
 # ── Batch scanning with progress ───────────────────────────────────────────
 
-def scan_batch(ips: list[str], scan_fn, action_name: str = "Scanning"):
-    """Run a scan function on multiple IPs with progress tracking."""
-    total = len(ips)
-    for i, ip in enumerate(ips, 1):
-        print(f"\n{progress(i, total, ip, action_name)}")
+def _run_quiet(scan_fn, ip: str, tag: str):
+    """Worker entry point: mark thread as quiet, run scan, restore."""
+    _ctx.quiet = True
+    _ctx.tag = tag
+    try:
         scan_fn(ip)
+    finally:
+        _ctx.quiet = False
+        _ctx.tag = ""
+
+
+def scan_batch(ips: list[str], scan_fn, action_name: str = "Scanning", jobs: int | None = None):
+    """Run a scan function on multiple IPs.
+
+    With multiple workers, scans run in parallel and each host's output is
+    buffered then printed atomically when its scan finishes. With one worker
+    (or one host), behavior is identical to the old serial path.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from .concurrency import optimal_workers, describe_workers
+
+    total = len(ips)
+    if total == 0:
+        return
+
+    workers = optimal_workers(total, user_override=jobs)
+
+    if workers <= 1:
+        for i, ip in enumerate(ips, 1):
+            print(f"\n{progress(i, total, ip, action_name)}")
+            scan_fn(ip)
+    else:
+        print(f"\n{cyan('[*]')} Parallel mode: {describe_workers(workers)}")
+        print(f"{dim('[*] Output is buffered per host and printed when each scan finishes.')}")
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {
+                ex.submit(_run_quiet, scan_fn, ip, f"{idx}/{total} {ip}"): ip
+                for idx, ip in enumerate(ips, 1)
+            }
+            done = 0
+            for fut in as_completed(futures):
+                done += 1
+                try:
+                    fut.result()
+                except Exception as e:
+                    ip = futures[fut]
+                    with _print_lock:
+                        print(f"{red('[!]')} Scan failed for {ip}: {e}")
+                with _print_lock:
+                    print(f"{cyan('[*]')} Progress: {done}/{total} host(s) finished.")
+
     print(f"\n{green('[+]')} Batch complete: {total} host(s) scanned.")
 
 

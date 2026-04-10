@@ -98,6 +98,38 @@ sudo python3 nmap.py --mode vuln --target 192.168.1.1
 | `--target`, `-t` | IP, hostname, or CIDR range |
 | `--output`, `-o` | Output file prefix (default: `scan`) |
 | `--auto` | After `discover`, auto-run port + vuln scans on every live host |
+| `--jobs`, `-j` | Parallel workers for batch scans (default: auto from CPU/RAM, `1` = serial) |
+
+---
+
+## Performance — parallel scanning
+
+When you scan multiple hosts in one go (interactive batch, `--auto`, or any
+multi-target selection in the menu), scans run in parallel. The worker count
+is auto-tuned to your machine:
+
+- **CPU budget:** half the logical CPU count (nmap `-T4` already uses internal
+  parallelism — running 1 nmap per core would oversubscribe).
+- **RAM budget:** ~400 MB per concurrent scan.
+- **Hard cap:** 8 workers, regardless of how big the box is.
+
+Override with `--jobs N`:
+
+```bash
+sudo python3 nmap.py --mode discover --target 192.168.1.0/24 --auto            # auto
+sudo python3 nmap.py --mode discover --target 192.168.1.0/24 --auto --jobs 4   # force 4
+sudo python3 nmap.py --mode discover --target 192.168.1.0/24 --auto --jobs 1   # serial
+```
+
+In parallel mode each host's `nmap` output is buffered and printed as one
+contiguous block when that scan finishes, so the terminal stays readable.
+
+For accurate RAM detection install `psutil` (optional — without it the tool
+falls back to a conservative 4 GB assumption):
+
+```bash
+pip install psutil
+```
 
 ---
 

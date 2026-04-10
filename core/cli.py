@@ -27,6 +27,8 @@ Examples:
     parser.add_argument("--output", "-o", default="scan", help="Output file name prefix (default: scan)")
     parser.add_argument("--auto", action="store_true",
                         help="After discovery, auto-run port + vuln scan on all live hosts")
+    parser.add_argument("--jobs", "-j", type=int, default=None,
+                        help="Parallel scan workers for batch scans (default: auto-detect from CPU/RAM, 1 = serial)")
 
     args = parser.parse_args()
 
@@ -44,9 +46,8 @@ Examples:
         if args.auto and discovered_hosts:
             ips = get_discovered_ips()
             print(f"\n[*] --auto: Running port + CVE scan on {len(ips)} live host(s)...\n")
-            for ip in ips:
-                scan_ports(ip)
-                scan_vuln(ip)
+            scan_batch(ips, scan_ports, "Port scanning", jobs=args.jobs)
+            scan_batch(ips, scan_vuln, "CVE scanning", jobs=args.jobs)
     elif args.mode == "quick":
         scan_quick(args.target)
     elif args.mode == "ports":

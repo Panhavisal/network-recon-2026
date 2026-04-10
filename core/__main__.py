@@ -4,6 +4,7 @@ import os
 import sys
 import signal
 
+from .deps import ensure_dependencies
 from .report import generate_reports
 
 
@@ -16,6 +17,7 @@ def check_root():
 
 def main():
     check_root()
+    ensure_dependencies()
 
     # Global Ctrl+C handler for CLI mode
     def _sigint_handler(sig, frame):

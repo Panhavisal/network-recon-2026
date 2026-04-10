@@ -16,6 +16,7 @@ env/
 
 # Scan results / reports
 results/
+scan_results/
 *.pdf
 *.json
 *_*.txt
